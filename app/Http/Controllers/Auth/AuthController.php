@@ -8,8 +8,29 @@ use App\Http\Controllers\Controller;
 use Illuminate\Foundation\Auth\ThrottlesLogins;
 use Illuminate\Foundation\Auth\AuthenticatesAndRegistersUsers;
 
+use App\Message;
+use Illuminate\Http\Request;
+use App\Services\RegistrationService;
+use Auth;
+use View;
+
+/**
+ * Class AuthController
+ * @package App\Http\Controllers\Auth
+ */
 class AuthController extends Controller
 {
+    /**
+     * Go to list page after wrong login
+     * @var string
+     */
+    protected $loginPath = '/';
+
+    /**
+     * Go to list after success login or registration
+     * @var string
+     */
+    protected $redirectPath = 'chat/list';
     /*
     |--------------------------------------------------------------------------
     | Registration & Login Controller
@@ -24,42 +45,70 @@ class AuthController extends Controller
     use AuthenticatesAndRegistersUsers, ThrottlesLogins;
 
     /**
-     * Create a new authentication controller instance.
+     * Handle a login request to the application.
      *
-     * @return void
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
      */
-    public function __construct()
+    public function postLogin(Request $request)
     {
-        $this->middleware('guest', ['except' => 'getLogout']);
+        $this->validate($request, [
+            $this->loginUsername() => 'required', 'password' => 'required',
+        ]);
+
+        // If the class is using the ThrottlesLogins trait, we can automatically throttle
+        // the login attempts for this application. We'll key this by the username and
+        // the IP address of the client making these requests into this application.
+        $throttles = $this->isUsingThrottlesLoginsTrait();
+
+        if ($throttles && $this->hasTooManyLoginAttempts($request)) {
+            return $this->sendLockoutResponse($request);
+        }
+
+        $credentials = $this->getCredentials($request);
+        $email = $credentials['email'];
+        $password = $credentials['password'];
+
+        if (Auth::attempt(array('email' => $email, 'password' => $password), $request->has('remember'))
+            || Auth::attempt(array('username' => $email, 'password' => $password), $request->has('remember'))) {
+            return $this->handleUserWasAuthenticated($request, $throttles);
+        }
+
+        // If the login attempt was unsuccessful we will increment the number of attempts
+        // to login and redirect the user back to the login form. Of course, when this
+        // user surpasses their maximum number of attempts they will get locked out.
+        if ($throttles) {
+            $this->incrementLoginAttempts($request);
+        }
+
+        return redirect($this->loginPath())
+            ->withInput($request->only($this->loginUsername(), 'remember'))
+            ->withErrors([
+                $this->loginUsername() => $this->getFailedLoginMessage(),
+            ]);
     }
 
     /**
-     * Get a validator for an incoming registration request.
+     * Handle a registration request for the application.
+     * Rewrite standart laravel5 post registration
      *
-     * @param  array  $data
-     * @return \Illuminate\Contracts\Validation\Validator
+     * @param Request $request
+     * @param RegistrationService $registrationService
+     * @return \Illuminate\Http\RedirectResponse|\Illuminate\Routing\Redirector
      */
-    protected function validator(array $data)
+    public function postRegister(Request $request, RegistrationService $registrationService)
     {
-        return Validator::make($data, [
-            'name' => 'required|max:255',
+         $this->validate($request, [
+            'username' => 'required|max:255|unique:users',
             'email' => 'required|email|max:255|unique:users',
             'password' => 'required|confirmed|min:6',
         ]);
-    }
 
-    /**
-     * Create a new user instance after a valid registration.
-     *
-     * @param  array  $data
-     * @return User
-     */
-    protected function create(array $data)
-    {
-        return User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password' => bcrypt($data['password']),
-        ]);
+        $user = $registrationService->registration($request->all());
+
+        //Authorize user
+        Auth::login($user);
+
+        return redirect('chat/list');
     }
 }
